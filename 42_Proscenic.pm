@@ -15,6 +15,8 @@ use strict;
 use warnings;
 
 use XML::Simple qw(:strict);
+use MIME::Base64;
+
 
 use constant {
     MODE_AUTO => 'AA55A55A09FDE20906000100020500000000',
@@ -63,28 +65,72 @@ sub Proscenic_Set($$@) {
 
     return "\"set $name\" needs at least one argument" unless(defined($cmd));
 
-    my $list = 'mode stop:noArg run:noArg dock:noArg start:noArg';
+    my $list = 'mode:auto,area,edge,zigzag stop:noArg run:noArg dock:noArg start:noArg';
+
+    readingsSingleUpdate($hash, 'last_clean', time(), 1) if($cmd eq 'start' || $cmd eq 'mode');
+
+    return Proscenic_Send($hash, DOCK) if($cmd eq 'dock');
+    return Proscenic_Send($hash, STOP) if($cmd eq 'stop');
+    return Proscenic_Send($hash, RUN) if($cmd eq 'start');
+
+    if($cmd eq 'mode') {
+        readingsSingleUpdate($hash, 'mode', $args[0], 1);
+        return Proscenic_Send($hash, MODE_AUTO)  if($args[0] eq 'auto');
+        return Proscenic_Send($hash, MODE_AREA) if($args[0] eq 'area');
+        return Proscenic_Send($hash, MODE_EDGE) if($args[0] eq 'edge');
+        return Proscenic_Send($hash, MODE_ZIGZAG) if($args[0] eq 'zigzag');
+    }
+
+    return "Unknown argument $cmd, choose one of $list";
+}
+
+
+sub Proscenic_Get($$@) {
+    my ($hash, $name, $cmd, @args) = @_;
+
+    my $list = "";
 
     return "Unknown argument $cmd, choose one of $list";
 }
 
 
 sub Proscenic_Send($$) {
-    my ($dest, $cmd)  = @_;
+    my ($hash, $command)  = @_;
     my $sock = IO::Socket::INET->new(
         Proto    => 'udp',
         PeerPort => 10684,
         PeerAddr => '255.255.255.255',
         Broadcast => 1
     ) or die "Could not create socket: $!\n";
-    $sock->send($cmd) or die "Send error: $!\n";
-    return "send $cmd";
+
+    $sock->send(Proscenic_Build($hash, $command)) or die "Send error: $!\n";
+
+    return undef;
 }
 
 
 sub Proscenic_Build($$) {
     my ($hash, $command) = @_;
-    my $xml = XMLout(KeyAttr => { server => 'name' }, ForceArray => [ 'server', 'address' ]);
-    return $xml;
+    my $name = $hash->{NAME};
+
+    my $packet = {
+        HEADER => {
+            MsgType => 'MSG_TRANSIT_SHAS_REQ',
+            MsgSeq => 1,
+            From => '020000000000000000',
+            To => $attr{$name}{serial},
+            Keep => 0
+        },
+        MESSAGE => {
+            Version => '1.0',
+                BODY => {
+                    content => encode_base64('<TRANSIT_INFO><COMMAND>ROBOT_CMD</COMMAND><RTU>' . $command . '</RTU></TRANSIT_INFO>')
+                }
+            }
+    };
+
+    return XMLout($packet, KeyAttr => { }, RootName => 'xml', NoIndent => 1, XMLDecl => 1);
 }
 
+
+1;
